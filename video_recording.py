@@ -1,11 +1,43 @@
 # Just a script to play around with video recording
 # Write something more formal when this code is working how we want
 
+# CODE DOES NOT CURRENTLY WRITE BUTTON PRESS EVENTS
+
+def writeEvent(f,timestamp,event):
+    systime = time.localtime(time.time())
+    systime = str(systime.tm_hour) + ":" + str(systime.tm_min) + ":" + str(systime.tim_sec)
+    f.write(systime + "\t" + str(round(timestamp,3)) + "\t" + event)
+
+import time
 import numpy as np
 import cv2
+import serial
+import glob
 
-# Boolean to specify whether we want to write the video
 writeVideo = False
+writeTiming = False
+listenScan = False
+
+scanTimeout = 6
+
+Button1 = 49
+Button2 = 50
+Button3 = 51
+Button4 = 52
+TriggerKey=53
+
+isScan = False
+trigger = False
+timeSinceLastTrigger = 0
+
+if listenScan:
+    allDevices = glob.glob('/dev/tty.USA*')
+    deviceName = allDevices[0];
+    BaudRate = 115200;
+    ser = serial.Serial(deviceName,BaudRate,serial.EIGHTBITS,timeout=0)
+
+if writeTiming:
+    f = open('timing_output.txt','w')
 
 # -1 works, but not sure what the argument is specifying
 # 0 is the first camera (most likely webcam)
@@ -17,45 +49,70 @@ cap = cv2.VideoCapture(0)
 if writeVideo:
     # VideoWriter_fourcc argument specifies the type of codec to use when
     #   writing the video file
+    # cap.get(propID) gets properties of the capture device
+    # cap.set(propID,value) sets the property
+    # cap.get(3) is width; cap.get(4) is height
+    oFile = 'testWebcam.avi'
     fourcc = cv2.VideoWriter_fourcc(*'X264')
-    FPS = 20.0
-    Frame_Size = (640,480)
-    isColor = True
-    out = cv2.VideoWriter('output.avi',fourcc, FPS, Frame_Size, isColor)
+    FPS = cap.get(cv2.CAP_PROP_FPS)
+    Frame_Height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    Frame_Width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    Frame_Size = (int(Frame_Width),int(Frame_Height))
+    out = cv2.VideoWriter(oFile,fourcc, FPS, Frame_Size)
 
-# cap.isOpened() checks to make sure the capture is opened
-# This should happen automatically and stay open
-# If it isn't open, then we can't record anything
-# In this case, we would need to call cap.open()
-# cap.get(propID) gets properties of the capture device
-# cap.set(propID,value) sets the property
-# cap.get(3) is width; cap.get(4) is height
-# The documentation on this is broken, so that's all I can say...
 while(cap.isOpened()):
     ret, frame = cap.read()
-    # ret is a boolean for whether the frame was read correctly
-    # It can be used to check for the end of the video
     if ret==True:
-
-        # write the flipped frame
-        if writeVideo:
-            out.write(frame)
 
         cv2.imshow('frame',frame)
 
-        # if reading and displaying from a file, we want to read
-        # argument for waitKey is milliseconds of delay (time to wait for ...
-        #   user input)
-        # delay <= 0 or no delay specified will result in infinite waiting
-        # Keep in mind delay is minimum wait time, may be longer
-        if cv2.waitKey(0) & 0xFF == ord('q'):
+        if listenScan:
+            # 3 should be more than enough
+            responses = ser.read(3)
+            if TriggerKey in responses:
+                trigger = True
+                timeSinceLastTrigger = 0
+            else if isScan:
+                trigger = False
+                timeSinceLastTrigger = time.time() - timeSinceLastTrigger
+                if timeSinceLastTrigger > scanTimeout:
+                    isScan = False
+            else:
+                trigger = False
+
+
+        if writeVideo and out.isOpened():
+            if trigger and not isScan:
+                isScan = True
+                oFile = 'scan_output.avi'
+                outnew = cv2.VideoWriter(oFile,fourcc,FPS,Frame_Size)
+                out.release()
+                out = outnew
+                tScanStart = time.time()
+                if writeTiming:
+                    writeEvent(f,0,"SCAN_STARTED")
+            else if trigger and isScan and writeTiming:
+                # Write to a file, the timestamp of the video and the trigger
+                timestamp = time.time() - tScanStart
+                writeEvent(f,timestamp,"TRIGGER")
+            out.write(frame)
+
+        if listenScan:
+            trigger = False
+
+        # if cv2.waitKey(5) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
             break
     else:
-        # break if we reach the end of the file or cannot read any more ...
-        #   frames for some other reason
         break
 
 # Release everything if job is finished
 cap.release()
-out.release()
+if writeVideo:
+    out.release()
+if listenScan:
+    ser.close()
+if writeTiming:
+    f.close()
 cv2.destroyAllWindows()
